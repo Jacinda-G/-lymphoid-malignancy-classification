@@ -1,0 +1,24 @@
+# Core
+numpy
+pandas
+
+# Visualization
+matplotlib
+opencv-python
+Pillow
+
+# Deep Learning
+torch
+torchvision
+
+# Web App
+streamlit
+
+# Explainability
+shap
+
+# Medical Imaging Support
+openslide-python
+
+# Machine Learning Tools
+scikit-learn
