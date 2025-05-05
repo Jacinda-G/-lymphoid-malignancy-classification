@@ -5,6 +5,7 @@ pandas
 # Visualization
 matplotlib
 opencv-python
+opencv-python-headless
 Pillow
 
 # Deep Learning
