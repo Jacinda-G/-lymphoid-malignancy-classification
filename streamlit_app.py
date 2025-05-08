@@ -112,116 +112,80 @@ elif demo_section == "GradCAM/SHAP Visualizations":
 if st.button("➡ Go to Interactive Mode"):
     st.session_state.mode = "Interactive Mode (Upload & Train)"
 
-# --- Interactive Mode ---
-elif mode == "Interactive Mode (Upload & Train)":
     interactive_section = st.sidebar.radio(
         "Interactive Actions", 
-        ["Upload Data", "Preprocess Data", "Train Model", "Inference & Visualize"]
+        ["Upload Data, Inference, & Visualize"]
     )
 
     uploaded_tile = None
     uploaded_files = None
     img = None  # For inference image
 
-    # --- Upload Data Section ---
-    if interactive_section == "Upload Data":
-        st.header("Upload Your Own Data")
-        st.write("Upload Whole Slide Images (WSIs) or tile patches to use in preprocessing or training a new model.")
-
-        uploaded_files = st.file_uploader(
-            "Upload WSIs or tile patches",
-            type=["tif", "png", "jpg"],
-            accept_multiple_files=True,
-            help="Accepted formats: .tif, .png, .jpg. You can select multiple files."
-        )
-        
-        if uploaded_files:
-            st.success(f"Uploaded {len(uploaded_files)} files successfully!")
-            st.image([Image.open(file) for file in uploaded_files], width=150)
-
-    # --- Preprocess Data Section ---
-    elif interactive_section == "Preprocess Data":
-        st.header("Data Preprocessing")
-        st.write("You can normalize images, filter out poor quality tiles, and optionally retile images with overlap.")
-
-        normalize = st.checkbox("Normalize Images", help="Adjusts intensity values to a standard range.")
-        filter_tiles = st.checkbox("Filter Uninformative Tiles", help="Removes tiles that are too blank or noisy.")
-        retile = st.checkbox("Tile WSIs with Overlap", help="Generate overlapping tiles for more data.")
-
-        if st.button("Run Preprocessing"):
-            st.success("✅ Preprocessing complete! (Note: This is a demo — real functionality coming soon.)")
-
-    # --- Train Model Section ---
-    elif interactive_section == "Train Model":
-        st.header("Train a ResNet Model")
-        st.write("Use the uploaded tiles to train a deep learning model. This may take a few minutes depending on dataset size.")
-
-        if st.button("Train ResNet18 Model"):
-            st.success("✅ Training complete! (Note: This is a demo — real training runs in notebook!)")
-
     # --- Inference & Visualize Section ---
-    elif interactive_section == "Inference & Visualize":
-        st.header("Upload or Paste Tile Image for Prediction")
-        st.write("Upload a preprocessed tile image or paste an image URL to classify and visualize model explanations.")
+# --- Interactive Mode (Single Page Version) ---
+elif mode == "Interactive Mode (Upload & Train)":
+    st.header("Upload, Inference, & Visualize")
+    st.write("Upload a tile image or paste an image URL to classify and visualize model explanations using GradCAM.")
 
-        uploaded_tile = st.file_uploader("Upload a tile image (.png, .jpg, .tif)", type=["png", "jpg", "tif"])
-        url = st.text_input("Or paste image URL (optional)")
+    uploaded_tile = st.file_uploader("Upload a tile image (.png, .jpg, .tif)", type=["png", "jpg", "tif"])
+    url = st.text_input("Or paste image URL (optional)")
 
-        if uploaded_tile is not None:
-            img = Image.open(uploaded_tile).convert("RGB")
-            st.image(img, caption="Uploaded Image", use_column_width=True)
+    img = None
 
-        elif url:
+    if uploaded_tile is not None:
+        img = Image.open(uploaded_tile).convert("RGB")
+        st.image(img, caption="Uploaded Image", use_column_width=True)
+
+    elif url:
+        try:
+            response = requests.get(url)
+            img = Image.open(BytesIO(response.content)).convert("RGB")
+            st.image(img, caption="Image from URL", use_column_width=True)
+        except Exception as e:
+            st.error(f"Could not load image from URL: {e}")
+
+    if img and st.button("Classify & Explain"):
+        with st.spinner("🔎 Running inference and generating GradCAM..."):
+
+            # Preprocess
+            preprocess = transforms.Compose([
+                transforms.Resize((224, 224)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+            ])
+            input_tensor = preprocess(img).unsqueeze(0).to(device)
+
+            # Load model
+            model = models.resnet18(pretrained=False)
+            model.fc = nn.Linear(model.fc.in_features, 3)  # Adjust if more/less classes
+            model.load_state_dict(torch.load("data/models/trained_resnet18.pth", map_location=device))
+            model = model.to(device)
+            model.eval()
+
+            # Predict
+            with torch.no_grad():
+                outputs = model(input_tensor)
+                probs = torch.nn.functional.softmax(outputs, dim=1)
+                top_prob, top_class = probs.topk(1, dim=1)
+
+            class_labels = ["CLL", "FL", "MCL"]  # Replace with your class labels
+            predicted_label = class_labels[top_class.item()]
+            confidence = top_prob.item()
+
+            st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
+
+            # GradCAM
             try:
-                response = requests.get(url)
-                img = Image.open(BytesIO(response.content)).convert("RGB")
-                st.image(img, caption="Image from URL", use_column_width=True)
+                target_layer = model.layer4[1].conv2
+                gradcam = GradCAM(model, target_layer)
+                heatmap = gradcam.generate(input_tensor)
+
+                img_np = np.array(img.resize((224, 224)))
+                heatmap_resized = cv2.resize(heatmap, (img_np.shape[1], img_np.shape[0]))
+                heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
+                superimposed_img = heatmap_color * 0.4 + img_np
+
+                st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM Heatmap", use_column_width=True)
+
             except Exception as e:
-                st.error(f"Could not load image from URL: {e}")
-
-        if img and st.button("Classify & Explain"):
-            with st.spinner("🔎 Running inference and generating GradCAM..."):
-
-                # Preprocess
-                preprocess = transforms.Compose([
-                    transforms.Resize((224, 224)),
-                    transforms.ToTensor(),
-                    transforms.Normalize(mean=[0.5, 0.5, 0.5],
-                                         std=[0.5, 0.5, 0.5])
-                ])
-                input_tensor = preprocess(img).unsqueeze(0).to(device)
-
-                # Load model
-                model = models.resnet18(pretrained=False)
-                num_ftrs = model.fc.in_features
-                model.fc = nn.Linear(num_ftrs, 3)  # Update to your number of classes
-                model.load_state_dict(torch.load("data/models/trained_resnet18.pth", map_location=device))
-                model = model.to(device)
-                model.eval()
-
-                # Predict
-                with torch.no_grad():
-                    outputs = model(input_tensor)
-                    probs = torch.nn.functional.softmax(outputs, dim=1)
-                    top_prob, top_class = probs.topk(1, dim=1)
-
-                class_labels = ["CLL", "FL", "MCL"]  # Replace with your actual class names
-                predicted_label = class_labels[top_class.item()]
-                confidence = top_prob.item()
-
-                st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
-
-                # GradCAM
-                try:
-                    target_layer = model.layer4[1].conv2
-                    gradcam = GradCAM(model, target_layer)
-                    heatmap = gradcam.generate(input_tensor)
-
-                    img_np = np.array(img.resize((224, 224)))
-                    heatmap_resized = cv2.resize(heatmap, (img_np.shape[1], img_np.shape[0]))
-                    heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
-                    superimposed_img = heatmap_color * 0.4 + img_np
-
-                    st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM Heatmap", use_column_width=True)
-                except Exception as e:
-                    st.warning(f"GradCAM generation failed: {e}")
+                st.warning(f"GradCAM generation failed: {e}")
