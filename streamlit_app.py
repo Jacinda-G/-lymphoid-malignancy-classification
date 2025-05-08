@@ -60,9 +60,9 @@ with tab_demo:
     elif step == 5:
         st.write("Evaluation metrics include accuracy, precision, recall, and F1 score.")
         st.subheader("Confusion Matrix")
-        st.image("demo_assets/confusion_matrix.png", caption="Confusion Matrix", use_column_width=True)
+        st.image("demo_assets/confusion_matrix.png", caption="Confusion Matrix", use_container_width=True)
         st.subheader("ROC AUC Curve")
-        st.image("demo_assets/roc_auc_curve.png", caption="ROC AUC Curve", use_column_width=True)
+        st.image("demo_assets/roc_auc_curve.png", caption="ROC AUC Curve", use_container_width=True)
 
     col1, col2 = st.columns([1, 3])
     if col1.button("⬅ Back", disabled=(step == 0)):
@@ -80,12 +80,12 @@ with tab_interactive:
 
     if uploaded_tile is not None:
         img = Image.open(uploaded_tile).convert("RGB")
-        st.image(img, caption="Uploaded Image", use_column_width=True)
+        st.image(img, caption="Uploaded Image", use_container_width=True)
     elif url:
         try:
             response = requests.get(url)
             img = Image.open(BytesIO(response.content)).convert("RGB")
-            st.image(img, caption="Image from URL", use_column_width=True)
+            st.image(img, caption="Image from URL", use_container_width=True)
         except Exception as e:
             st.error(f"Could not load image from URL: {e}")
 
@@ -119,6 +119,6 @@ with tab_interactive:
                 heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
                 superimposed_img = heatmap_color * 0.4 + img_np
 
-                st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM Heatmap", use_column_width=True)
+                st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM Heatmap", use_container_width=True)
             except Exception as e:
                 st.warning(f"GradCAM generation failed: {e}")
