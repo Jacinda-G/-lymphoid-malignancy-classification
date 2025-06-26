@@ -6,20 +6,28 @@ import torchvision.transforms as transforms
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix
 import cv2
 import sys
 from PIL import Image
 import requests
 from io import BytesIO
+from fpdf import FPDF
 sys.path.append("./scripts")
 from gradcam_utils import GradCAM
 from scripts.evaluate import predict_tile
 
+# --- Tabs Navigation ---
+
+st.set_page_config(page_title="Lymphoid Assistant", layout="wide", 
+                   page_icon="🧬", initial_sidebar_state="expanded")
+
+tab_demo, tab_interactive, tab_help = st.tabs(["🧪 Demo Mode", "🔍 Interactive Mode", "❓ Help"])
+
 # --- Device setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# --- Tabs Navigation ---
-tab_demo, tab_interactive, tab_help = st.tabs(["🧪 Demo Mode", "🔍 Interactive Mode", "❓ Help"])
+st.sidebar.markdown(
+    f"**Compute:** {'GPU ⚡' if device.type=='cuda' else 'CPU 🐢'}")
 
 # --- DEMO MODE ---
 with tab_demo:
@@ -40,7 +48,6 @@ with tab_demo:
     step = st.session_state.demo_step
     st.header(f"🧪 {demo_sections[step]}")
     
-
     if step == 0:
         st.write("This deep learning pipeline is designed to assist in the diagnosis of hematologic malignancies by classifying whole slide image (WSI) tiles into three major subtypes: Chronic Lymphocytic Leukemia (CLL), Follicular Lymphoma (FL), and Mantle Cell Lymphoma (MCL). The pipeline includes stages for preprocessing, tiling of WSIs, training and evaluating a convolutional neural network (ResNet-50), and visualizing model interpretability using Grad-CAM.")
         st.write("This project is part of a larger research initiative to improve the accuracy and efficiency of lymphoma diagnosis through advanced image analysis techniques.")
@@ -85,30 +92,79 @@ with tab_interactive:
     img = None
 
     # --- Security Check ---
-    if uploaded_tile is not None and uploaded_tile.size > 5_000_000:
-        st.error("Image too large. Please upload a file under 5MB.")
+    if uploaded_tile is not None and uploaded_tile.size > 2_000_000:
+        st.error("Image too large. Please upload a file under 2MB.")
 
-    # --- Load image ---
-    if uploaded_tile is not None:
-        img = Image.open(uploaded_tile).convert("RGB")
-        st.image(img, caption="Uploaded Image", use_container_width=True)
-    elif url:
+# --- Initialize Variables ---
+predicted_label = None
+confidence = None
+true_label = None  # Add this to handle the true label for classification metrics
+report = None  # Initialize the report and confusion matrix
+confusion = None  # Initialize the confusion matrix
+
+# --- Load Image ---
+if uploaded_tile is not None:
+    img = Image.open(uploaded_tile).convert("RGB")
+    st.image(img, caption="Uploaded Image", use_container_width=True)
+elif url:
+    try:
+        response = requests.get(url)
+        img = Image.open(BytesIO(response.content)).convert("RGB")
+        st.image(img, caption="Image from URL", use_container_width=True)
+    except Exception as e:
+        st.error(f"Could not load image from URL: {e}")
+
+# --- Inference and GradCAM (Automatically triggered) ---
+if img:
+    with st.spinner("🔎 Running inference and generating GradCAM..."):
+        preprocess = transforms.Compose([
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+        input_tensor = preprocess(img).unsqueeze(0).to(device)
+
+        @st.cache_resource
+        def load_model():
+            model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+            model.fc = nn.Linear(model.fc.in_features, 3)
+            model.load_state_dict(torch.load("data/models/trained_resnet50.pth", map_location=device))
+            model = model.to(device)
+            model.eval()
+            return model
+
+        model = load_model()
+
+        # Now inference logic continues at the same level (not indented further)
+        class_labels = ["CLL", "FL", "MCL"]
+        output = model(input_tensor)
+        probabilities = torch.nn.functional.softmax(output, dim=1)
+        confidence, predicted_class = torch.max(probabilities, 1)
+        predicted_label = class_labels[predicted_class.item()]
+        confidence = confidence.item()
+
+        st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
+        
+
+        
+        # --- Descriptive Statistics ---
+        img_np = np.array(img.resize((224, 224)))
+
+        # Calculate descriptive statistics for each RGB channel
+        mean_rgb = np.mean(img_np, axis=(0, 1))  # Mean for each channel (R, G, B)
+        median_rgb = np.median(img_np, axis=(0, 1))  # Median for each channel
+        std_rgb = np.std(img_np, axis=(0, 1))  # Standard deviation for each channel
+
+        st.subheader("📊 Descriptive Statistics")
+        st.write(f"**Mean (RGB)**: {mean_rgb}")
+        st.write(f"**Median (RGB)**: {median_rgb}")
+        st.write(f"**Standard Deviation (RGB)**: {std_rgb}")
+
+        # --- Data Visualization ---
+# --- Grad-CAM ---
+if img:
+    with st.spinner("🔎 Running inference and generating GradCAM..."):
         try:
-            response = requests.get(url)
-            img = Image.open(BytesIO(response.content)).convert("RGB")
-            st.image(img, caption="Image from URL", use_container_width=True)
-        except Exception as e:
-            st.error(f"Could not load image from URL: {e}")
-
-    # --- Analysis method selection ---
-    analysis_method = st.selectbox(
-        "Choose an analysis method",
-        ["None", "Grayscale Histogram", "Color Histogram", "Edge Detection"]
-    )
-
-    # --- Inference and GradCAM ---
-    if img and st.button("Classify & Explain"):
-        with st.spinner("🔎 Running inference and generating GradCAM..."):
             preprocess = transforms.Compose([
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
@@ -116,87 +172,128 @@ with tab_interactive:
             ])
             input_tensor = preprocess(img).unsqueeze(0).to(device)
 
-            model = models.resnet50(pretrained=False)
-            model.fc = nn.Linear(model.fc.in_features, 3)
-            model.load_state_dict(torch.load("data/models/trained_resnet50.pth", map_location=device))
-            model = model.to(device)
-            model.eval()
+            @st.cache_resource
+            def load_model():
+                model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+                model.fc = nn.Linear(model.fc.in_features, 3)
+                model.load_state_dict(torch.load("data/models/trained_resnet50.pth", map_location=device))
+                model = model.to(device)
+                model.eval()
+                return model
+
+            model = load_model()
 
             class_labels = ["CLL", "FL", "MCL"]
-            predicted_label, confidence, _ = predict_tile(model, input_tensor, class_labels, device)
+            output = model(input_tensor)
+            probabilities = torch.nn.functional.softmax(output, dim=1)
+            confidence, predicted_class = torch.max(probabilities, 1)
+            predicted_label = class_labels[predicted_class.item()]
+            confidence = confidence.item()
 
             st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
 
-            try:
-                target_layer = model.layer4[1].conv2
-                gradcam = GradCAM(model, target_layer)
-                heatmap = gradcam.generate(input_tensor)
+            # --- Grad-CAM ---
+            target_layer = model.layer4[1].conv2
+            gradcam = GradCAM(model, target_layer)
+            heatmap = gradcam.generate(input_tensor)
 
-                img_np = np.array(img.resize((224, 224)))
-                heatmap_resized = cv2.resize(heatmap, (img_np.shape[1], img_np.shape[0]))
-                heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
-                superimposed_img = heatmap_color * 0.4 + img_np
+            img_np = np.array(img.resize((224, 224)))
+            heatmap_resized = cv2.resize(heatmap, (img_np.shape[1], img_np.shape[0]))
+            heatmap_color = cv2.applyColorMap(np.uint8(255 * heatmap_resized), cv2.COLORMAP_JET)
+            superimposed_img = heatmap_color * 0.4 + img_np
 
+            gradcam_img_path = "gradcam_image.png"
+            Image.fromarray(superimposed_img.astype(np.uint8)).save(gradcam_img_path)
+
+            col1, col2, col3 = st.columns(3)
+            with col1:
                 st.image(superimposed_img.astype(np.uint8), caption="Grad-CAM Heatmap", use_container_width=True)
-            except Exception as e:
-                st.warning(f"GradCAM generation failed: {e}")
 
-    # --- Visualization based on analysis method ---
-    if img and analysis_method != "None":
-        st.subheader(f"🔍 {analysis_method} Visualization")
-        img_np = np.array(img.resize((224, 224)))
-
-        if analysis_method == "Grayscale Histogram":
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-            hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
-            fig, ax = plt.subplots()
-            ax.plot(hist, color='gray')
-            st.pyplot(fig)
-
-        elif analysis_method == "Color Histogram":
-            fig, ax = plt.subplots()
-            for i, color in enumerate(['r', 'g', 'b']):
+            # --- RGB Histogram ---
+            color_channels = ['r', 'g', 'b']
+            fig_hist, ax_hist = plt.subplots()
+            for i, color in enumerate(color_channels):
                 hist = cv2.calcHist([img_np], [i], None, [256], [0, 256])
-                ax.plot(hist, color=color)
-            st.pyplot(fig)
+                ax_hist.plot(hist, color=color)
+            ax_hist.set_title('RGB Histogram')
+            with col2:
+                st.pyplot(fig_hist)
 
-        elif analysis_method == "Edge Detection":
-            gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-            edges = cv2.Canny(gray, 100, 200)
-            st.image(edges, caption="Edges", use_container_width=True)
+            # --- Boxplot ---
+            fig_box, ax_box = plt.subplots()
+            ax_box.boxplot(
+                [img_np[:, :, 0].flatten(), img_np[:, :, 1].flatten(), img_np[:, :, 2].flatten()],
+                tick_labels=["Red", "Green", "Blue"]
+            )
+            ax_box.set_title('Pixel Intensity Distribution')
+            with col3:
+                st.pyplot(fig_box)
 
-    # --- Generate & Save Report ---
-    if img and st.button("📝 Generate Analysis Report"):
-        report_text = f"""
-        ## Report Summary
+        except Exception as e:
+            st.warning(f"Grad-CAM generation failed: {e}")
 
-        **Prediction:** {predicted_label}  
-        **Confidence:** {confidence:.2%}  
-        **Analysis Method:** {analysis_method}
 
-        *Model: ResNet50 trained on lymphoma tiles.*
-        """
-        st.markdown(report_text)
-        st.download_button("📄 Download Report", data=report_text.encode(), file_name="analysis_report.txt")
+# --- Generate & Save PDF Report ---
+if img and st.button("📝 Generate Analysis Report"):
+    # Generate report text without performance metrics
+    report_text = f"""
+    # Analysis Report
+    
+    ## Prediction
+    **Prediction:** {predicted_label}  
+    **Confidence:** {confidence:.2%}
 
-    # --- Testing all functions ---
-    def run_tests():
-        return {
-            "Model Loaded": True,
-            "Image Provided": img is not None,
-            "Analysis Method Selected": analysis_method != "None",
-            "GradCAM Enabled": img is not None,
-            "Report Button Clicked": True
-        }
+    """
 
-    if st.button("🔎 Run System Test"):
-        test_results = run_tests()
-        st.json(test_results)
+    # Initialize PDF
+    pdf = FPDF()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.add_page()
+
+    # Add Title
+    pdf.set_font("Arial", size=16, style='B')
+    pdf.cell(200, 10, txt="Lymphoid Malignancy Classification Report", ln=True, align="C")
+    pdf.ln(10)
+
+    # Add Summary Text
+    pdf.set_font("Arial", size=12)
+    pdf.multi_cell(0, 10, report_text)
+
+    # Add Image: Original Image
+    pdf.ln(5)
+    img_path = "uploaded_image.png"
+    img.save(img_path)
+    pdf.image(img_path, x=10, w=180)
+    pdf.ln(10)
+
+    # Add Image: Grad-CAM
+    gradcam_img_path = "gradcam_image.png"
+    Image.fromarray(superimposed_img.astype(np.uint8)).save(gradcam_img_path)
+    pdf.image(gradcam_img_path, x=10, w=180)
+    pdf.ln(10)
+
+    # Add RGB Histogram
+    hist_img_path = "rgb_histogram.png"
+    fig.savefig(hist_img_path)
+    pdf.image(hist_img_path, x=10, w=180)
+    pdf.ln(10)
+
+    # Add Boxplot for Pixel Intensity Distribution
+    boxplot_img_path = "boxplot_rgb.png"
+    fig.savefig(boxplot_img_path)
+    pdf.image(boxplot_img_path, x=10, w=180)
+    pdf.ln(10)
+
+    # Save PDF to a buffer
+    pdf_output = pdf.output(dest='S').encode('latin1')
+    
+    # Provide download link for the PDF report
+    st.download_button("📄 Download PDF Report", data=pdf_output, file_name="analysis_report.pdf", key="pdf_report_download")
 
 # --- HELP TAB ---
 with tab_help:
     st.title("🛠 Help & Documentation")
-    st.markdown("""
+    st.markdown(""" 
     **App Overview**  
     This app classifies lymphoma subtypes from histopathology tiles using deep learning. You can upload images, run classification, visualize results with GradCAM, and explore image features.
 
@@ -212,5 +309,4 @@ with tab_help:
     4. Review GradCAM and image analysis results  
     5. Generate & download your report  
     6. Use the test button to verify system behavior
-
     """)

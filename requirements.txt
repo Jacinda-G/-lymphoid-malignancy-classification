@@ -13,7 +13,7 @@ torchvision
 
 # Web App
 streamlit
-
+fpdf
 # Explainability
 shap
 
