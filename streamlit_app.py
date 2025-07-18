@@ -16,6 +16,8 @@ from fpdf import FPDF
 sys.path.append("./scripts")
 from gradcam_utils import GradCAM
 from scripts.evaluate import predict_tile
+import os
+from datetime import datetime
 
 # --- Tabs Navigation ---
 
@@ -26,8 +28,13 @@ tab_demo, tab_interactive, tab_help = st.tabs(["🧪 Demo Mode", "🔍 Interacti
 
 # --- Device setup ---
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-st.sidebar.markdown(
-    f"**Compute:** {'GPU ⚡' if device.type=='cuda' else 'CPU 🐢'}")
+
+# --- Define Standard Transform ---
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+])
 
 # --- DEMO MODE ---
 with tab_demo:
@@ -92,8 +99,8 @@ with tab_interactive:
     img = None
 
     # --- Security Check ---
-    if uploaded_tile is not None and uploaded_tile.size > 2_000_000:
-        st.error("Image too large. Please upload a file under 2MB.")
+    if uploaded_tile is not None and uploaded_tile.size > 5_000_000:
+        st.error("Image too large. Please upload a file under 5MB.")
 
 # --- Initialize Variables ---
 predicted_label = None
@@ -162,10 +169,21 @@ if img:
 
         # --- Data Visualization ---
 # --- Grad-CAM ---
+def apply_clahe(img: Image.Image) -> Image.Image:
+    """Apply CLAHE to RGB image."""
+    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2LAB)
+    l, a, b = cv2.split(img_cv)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+    img_clahe = cv2.merge((l, a, b))
+    img_rgb = cv2.cvtColor(img_clahe, cv2.COLOR_LAB2RGB)
+    return Image.fromarray(img_rgb)
+
 if img:
     with st.spinner("🔎 Running inference and generating GradCAM..."):
         try:
             preprocess = transforms.Compose([
+                transforms.Lambda(apply_clahe),
                 transforms.Resize((224, 224)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
@@ -272,15 +290,39 @@ if img and st.button("📝 Generate Analysis Report"):
     pdf.image(gradcam_img_path, x=10, w=180)
     pdf.ln(10)
 
-    # Add RGB Histogram
+    # --- RGB Histogram ---
+    img_tensor = transform(img)  # This is what's used for model input
+    img_np = img_tensor.mul(255).byte().numpy().transpose(1, 2, 0)  # CHW → HWC for RGB
+
+    # Safely split into RGB channels
+    r_vals = img_np[:, :, 0].flatten()
+    g_vals = img_np[:, :, 1].flatten()
+    b_vals = img_np[:, :, 2].flatten()
+
+    fig1, ax1 = plt.subplots()
+    ax1.hist([r_vals, g_vals, b_vals], bins=256, color=['r', 'g', 'b'], label=['Red', 'Green', 'Blue'], alpha=0.6)
+    ax1.set_title("RGB Color Histogram")
+    ax1.set_xlabel("Pixel Intensity")
+    ax1.set_ylabel("Frequency")
+    ax1.legend()
+
     hist_img_path = "rgb_histogram.png"
-    fig.savefig(hist_img_path)
+    fig1.savefig(hist_img_path)
+    plt.close(fig1)  # Close to free memory
+
     pdf.image(hist_img_path, x=10, w=180)
     pdf.ln(10)
 
-    # Add Boxplot for Pixel Intensity Distribution
+    # --- Boxplot ---
+    fig2, ax2 = plt.subplots()
+    ax2.boxplot([r_vals, g_vals, b_vals], labels=['Red', 'Green', 'Blue'])
+    ax2.set_title("Pixel Intensity Distribution")
+    ax2.set_ylabel("Intensity")
+
     boxplot_img_path = "boxplot_rgb.png"
-    fig.savefig(boxplot_img_path)
+    fig2.savefig(boxplot_img_path)
+    plt.close(fig2)
+
     pdf.image(boxplot_img_path, x=10, w=180)
     pdf.ln(10)
 
@@ -290,13 +332,40 @@ if img and st.button("📝 Generate Analysis Report"):
     # Provide download link for the PDF report
     st.download_button("📄 Download PDF Report", data=pdf_output, file_name="analysis_report.pdf", key="pdf_report_download")
 
+    st.markdown("### Was this prediction correct?")
+feedback = st.radio("Select an option:", ["Yes", "No"])
+feedback_dir = "feedback_dir"
+if feedback == "No":
+    corrected_label = st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"])
+    if st.button("Submit Error Report"):
+        # Save feedback entry
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename_base = f"{timestamp}_{predicted_label}_wrong-{corrected_label}"
+
+        # Save image
+        img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
+        img.save(img_save_path)
+
+        # Append to log
+        log_path = os.path.join(feedback_dir, "feedback_log.csv")
+        with open(log_path, "a") as f:
+            f.write(f"{filename_base},{predicted_label},{corrected_label},{confidence:.4f}\n")
+
+        st.success("✅ Thank you! Your feedback and image were saved.")
+
 # --- HELP TAB ---
 with tab_help:
     st.title("🛠 Help & Documentation")
     st.markdown(""" 
     **App Overview**  
     This app classifies lymphoma subtypes from histopathology tiles using deep learning. You can upload images, run classification, visualize results with GradCAM, and explore image features.
-
+    
+    **Link to documentation**
+     https://github.com/Jacinda-G/-lymphoid-malignancy-classification
+                
+    **User Guide (click view raw to download)**
+    https://github.com/Jacinda-G/-lymphoid-malignancy-classification/blob/main/Lymphoid%20Malignancy%20Product%20User%20Guide.docx
+                
     **Tabs**  
     - **Demo Mode**: A walkthrough of how the model was trained.  
     - **Interactive Mode**: Upload or link a tile, classify, analyze, and download reports.  
