@@ -326,33 +326,42 @@ if img and st.button("📝 Generate Analysis Report"):
     st.download_button("📄 Download PDF Report", data=pdf_output, file_name="analysis_report.pdf", key="pdf_report_download")
 
 # --- Feedback Section ---
-    st.markdown("### Was this prediction correct?")
-    feedback = st.radio("Select an option:", ["Yes", "No"])
-    feedback_dir = "feedback_dir"
-    os.makedirs(feedback_dir, exist_ok=True)
+st.markdown("### Was this prediction correct?")
 
-    corrected_label = None  # Initialize corrected label variable
+# Use session state for feedback selection
+if "feedback_option" not in st.session_state:
+    st.session_state.feedback_option = "Yes"
 
-    if feedback == "No":
-        corrected_label = st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"], key="correction_input")
-  
-    if st.button("Submit Error Report"):
-        if feedback == "No" and corrected_label:
-            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            filename_base = f"{timestamp}_{predicted_label}_wrong-{corrected_label}"
+st.radio("Select an option:", ["Yes", "No"], key="feedback_option")
+
+feedback_dir = "feedback_dir"
+os.makedirs(feedback_dir, exist_ok=True)
+
+# If feedback is No, show correction dropdown and store it
+if st.session_state.feedback_option == "No":
+    if "corrected_label" not in st.session_state:
+        st.session_state.corrected_label = "CLL"
+    st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"], key="corrected_label")
+
+# Submit button with logic
+if st.button("Submit Error Report"):
+    if st.session_state.feedback_option == "No" and "corrected_label" in st.session_state:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename_base = f"{timestamp}_{predicted_label}_wrong-{st.session_state.corrected_label}"
 
         # Save image
-            img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
-            img.save(img_save_path)
+        img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
+        img.save(img_save_path)
 
         # Append to log
-            log_path = os.path.join(feedback_dir, "feedback_log.csv")
-            with open(log_path, "a") as f:
-                f.write(f"{filename_base},{predicted_label},{corrected_label},{confidence:.4f}\n")
+        log_path = os.path.join(feedback_dir, "feedback_log.csv")
+        with open(log_path, "a") as f:
+            f.write(f"{filename_base},{predicted_label},{st.session_state.corrected_label},{confidence:.4f}\n")
 
-            st.success("✅ Thank you! Your feedback and image were saved.")
-        else:
-            st.warning("Please select 'No' and choose the correct class before submitting.")
+        st.success("✅ Thank you! Your feedback and image were saved.")
+    else:
+        st.warning("Please select 'No' and choose the correct class before submitting.")
+
 
 # --- HELP TAB ---
 with tab_help:
