@@ -18,6 +18,8 @@ from gradcam_utils import GradCAM
 from scripts.evaluate import predict_tile
 import os
 from datetime import datetime
+from scripts.model_utils import load_model
+
 
 # --- Tabs Navigation ---
 
@@ -131,16 +133,7 @@ if img:
         ])
         input_tensor = preprocess(img).unsqueeze(0).to(device)
 
-        @st.cache_resource
-        def load_model():
-            model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-            model.fc = nn.Linear(model.fc.in_features, 3)
-            model.load_state_dict(torch.load("data/models/trained_resnet50.pth", map_location=device))
-            model = model.to(device)
-            model.eval()
-            return model
-
-        model = load_model()
+        model = load_model(device)
 
         # Now inference logic continues at the same level (not indented further)
         class_labels = ["CLL", "FL", "MCL"]
@@ -332,26 +325,34 @@ if img and st.button("📝 Generate Analysis Report"):
     # Provide download link for the PDF report
     st.download_button("📄 Download PDF Report", data=pdf_output, file_name="analysis_report.pdf", key="pdf_report_download")
 
+# --- Feedback Section ---
     st.markdown("### Was this prediction correct?")
-feedback = st.radio("Select an option:", ["Yes", "No"])
-feedback_dir = "feedback_dir"
-if feedback == "No":
-    corrected_label = st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"])
+    feedback = st.radio("Select an option:", ["Yes", "No"])
+    feedback_dir = "feedback_dir"
+    os.makedirs(feedback_dir, exist_ok=True)
+
+    corrected_label = None  # Initialize corrected label variable
+
+    if feedback == "No":
+        corrected_label = st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"], key="correction_input")
+  
     if st.button("Submit Error Report"):
-        # Save feedback entry
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename_base = f"{timestamp}_{predicted_label}_wrong-{corrected_label}"
+        if feedback == "No" and corrected_label:
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            filename_base = f"{timestamp}_{predicted_label}_wrong-{corrected_label}"
 
         # Save image
-        img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
-        img.save(img_save_path)
+            img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
+            img.save(img_save_path)
 
         # Append to log
-        log_path = os.path.join(feedback_dir, "feedback_log.csv")
-        with open(log_path, "a") as f:
-            f.write(f"{filename_base},{predicted_label},{corrected_label},{confidence:.4f}\n")
+            log_path = os.path.join(feedback_dir, "feedback_log.csv")
+            with open(log_path, "a") as f:
+                f.write(f"{filename_base},{predicted_label},{corrected_label},{confidence:.4f}\n")
 
-        st.success("✅ Thank you! Your feedback and image were saved.")
+            st.success("✅ Thank you! Your feedback and image were saved.")
+        else:
+            st.warning("Please select 'No' and choose the correct class before submitting.")
 
 # --- HELP TAB ---
 with tab_help:
