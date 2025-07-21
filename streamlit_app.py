@@ -22,7 +22,6 @@ from scripts.model_utils import load_model
 
 
 # --- Tabs Navigation ---
-
 st.set_page_config(page_title="Lymphoid Assistant", layout="wide", 
                    page_icon="🧬", initial_sidebar_state="expanded")
 
@@ -92,7 +91,7 @@ with tab_demo:
     if col2.button("Next ➡", disabled=(step == len(demo_sections) - 1)):
         st.session_state.demo_step = min(step + 1, len(demo_sections) - 1)
 
-# --- INTERACTIVE MODE ---
+# --- INTERACTIVE MODE --- (Including Feedback and PDF Generation)
 with tab_interactive:
     st.title("Interactive Inference & Visualization")
 
@@ -104,49 +103,46 @@ with tab_interactive:
     if uploaded_tile is not None and uploaded_tile.size > 5_000_000:
         st.error("Image too large. Please upload a file under 5MB.")
 
-# --- Initialize Variables ---
-predicted_label = None
-confidence = None
-true_label = None  # Add this to handle the true label for classification metrics
-report = None  # Initialize the report and confusion matrix
-confusion = None  # Initialize the confusion matrix
+    # Initialize Variables for Inference
+    predicted_label = None
+    confidence = None
+    true_label = None
+    report = None
+    confusion = None
 
-# --- Load Image ---
-if uploaded_tile is not None:
-    img = Image.open(uploaded_tile).convert("RGB")
-    st.image(img, caption="Uploaded Image", use_container_width=True)
-elif url:
-    try:
-        response = requests.get(url)
-        img = Image.open(BytesIO(response.content)).convert("RGB")
-        st.image(img, caption="Image from URL", use_container_width=True)
-    except Exception as e:
-        st.error(f"Could not load image from URL: {e}")
+    # --- Load Image ---
+    if uploaded_tile is not None:
+        img = Image.open(uploaded_tile).convert("RGB")
+        st.image(img, caption="Uploaded Image", use_container_width=True)
+    elif url:
+        try:
+            response = requests.get(url)
+            img = Image.open(BytesIO(response.content)).convert("RGB")
+            st.image(img, caption="Image from URL", use_container_width=True)
+        except Exception as e:
+            st.error(f"Could not load image from URL: {e}")
 
-# --- Inference and GradCAM (Automatically triggered) ---
-if img:
-    with st.spinner("🔎 Running inference and generating GradCAM..."):
-        preprocess = transforms.Compose([
-            transforms.Resize((224, 224)),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
-        input_tensor = preprocess(img).unsqueeze(0).to(device)
+    # --- Inference and GradCAM (Automatically triggered) ---
+    if img:
+        with st.spinner("🔎 Running inference and generating GradCAM..."):
+            preprocess = transforms.Compose([ 
+                transforms.Resize((224, 224)), 
+                transforms.ToTensor(), 
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) 
+            ])
+            input_tensor = preprocess(img).unsqueeze(0).to(device)
 
-        model = load_model(device)
+            model = load_model(device)
 
-        # Now inference logic continues at the same level (not indented further)
-        class_labels = ["CLL", "FL", "MCL"]
-        output = model(input_tensor)
-        probabilities = torch.nn.functional.softmax(output, dim=1)
-        confidence, predicted_class = torch.max(probabilities, 1)
-        predicted_label = class_labels[predicted_class.item()]
-        confidence = confidence.item()
+            class_labels = ["CLL", "FL", "MCL"]
+            output = model(input_tensor)
+            probabilities = torch.nn.functional.softmax(output, dim=1)
+            confidence, predicted_class = torch.max(probabilities, 1)
+            predicted_label = class_labels[predicted_class.item()]
+            confidence = confidence.item()
 
-        st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
-        
+            st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
 
-        
         # --- Descriptive Statistics ---
         img_np = np.array(img.resize((224, 224)))
 
@@ -160,37 +156,25 @@ if img:
         st.write(f"**Median (RGB)**: {median_rgb}")
         st.write(f"**Standard Deviation (RGB)**: {std_rgb}")
 
-        # --- Data Visualization ---
-# --- Grad-CAM ---
-def apply_clahe(img: Image.Image) -> Image.Image:
-    """Apply CLAHE to RGB image."""
-    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2LAB)
-    l, a, b = cv2.split(img_cv)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    img_clahe = cv2.merge((l, a, b))
-    img_rgb = cv2.cvtColor(img_clahe, cv2.COLOR_LAB2RGB)
-    return Image.fromarray(img_rgb)
+        # --- Grad-CAM ---
+        def apply_clahe(img: Image.Image) -> Image.Image:
+            """Apply CLAHE to RGB image."""
+            img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2LAB)
+            l, a, b = cv2.split(img_cv)
+            clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+            l = clahe.apply(l)
+            img_clahe = cv2.merge((l, a, b))
+            img_rgb = cv2.cvtColor(img_clahe, cv2.COLOR_LAB2RGB)
+            return Image.fromarray(img_rgb)
 
-if img:
-    with st.spinner("🔎 Running inference and generating GradCAM..."):
         try:
-            preprocess = transforms.Compose([
-                transforms.Lambda(apply_clahe),
+            preprocess = transforms.Compose([ 
+                transforms.Lambda(apply_clahe), 
                 transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+                transforms.ToTensor(), 
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) 
             ])
             input_tensor = preprocess(img).unsqueeze(0).to(device)
-
-            @st.cache_resource
-            def load_model():
-                model = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
-                model.fc = nn.Linear(model.fc.in_features, 3)
-                model.load_state_dict(torch.load("data/models/trained_resnet50.pth", map_location=device))
-                model = model.to(device)
-                model.eval()
-                return model
 
             model = load_model()
 
@@ -243,125 +227,123 @@ if img:
         except Exception as e:
             st.warning(f"Grad-CAM generation failed: {e}")
 
+        # --- PDF Report Generation ---
+        if img:
+            # Generate report text without performance metrics
+            report_text = f"""
+            # Analysis Report
+            
+            ## Prediction
+            **Prediction:** {predicted_label}  
+            **Confidence:** {confidence:.2%}
 
-# --- Generate & Save PDF Report ---
-if img and st.button("📝 Generate Analysis Report"):
-    # Generate report text without performance metrics
-    report_text = f"""
-    # Analysis Report
-    
-    ## Prediction
-    **Prediction:** {predicted_label}  
-    **Confidence:** {confidence:.2%}
+            """
 
-    """
+            # Initialize PDF
+            pdf = FPDF()
+            pdf.set_auto_page_break(auto=True, margin=15)
+            pdf.add_page()
 
-    # Initialize PDF
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.add_page()
+            # Add Title
+            pdf.set_font("Arial", size=16, style='B')
+            pdf.cell(200, 10, txt="Lymphoid Malignancy Classification Report", ln=True, align="C")
+            pdf.ln(10)
 
-    # Add Title
-    pdf.set_font("Arial", size=16, style='B')
-    pdf.cell(200, 10, txt="Lymphoid Malignancy Classification Report", ln=True, align="C")
-    pdf.ln(10)
+            # Add Summary Text
+            pdf.set_font("Arial", size=12)
+            pdf.multi_cell(0, 10, report_text)
 
-    # Add Summary Text
-    pdf.set_font("Arial", size=12)
-    pdf.multi_cell(0, 10, report_text)
+            # Add Image: Original Image
+            pdf.ln(5)
+            img_path = "uploaded_image.png"
+            img.save(img_path)
+            pdf.image(img_path, x=10, w=180)
+            pdf.ln(10)
 
-    # Add Image: Original Image
-    pdf.ln(5)
-    img_path = "uploaded_image.png"
-    img.save(img_path)
-    pdf.image(img_path, x=10, w=180)
-    pdf.ln(10)
+            # Add Image: Grad-CAM
+            gradcam_img_path = "gradcam_image.png"
+            Image.fromarray(superimposed_img.astype(np.uint8)).save(gradcam_img_path)
+            pdf.image(gradcam_img_path, x=10, w=180)
+            pdf.ln(10)
 
-    # Add Image: Grad-CAM
-    gradcam_img_path = "gradcam_image.png"
-    Image.fromarray(superimposed_img.astype(np.uint8)).save(gradcam_img_path)
-    pdf.image(gradcam_img_path, x=10, w=180)
-    pdf.ln(10)
+            # --- RGB Histogram ---
+            img_tensor = transform(img)  # This is what's used for model input
+            img_np = img_tensor.mul(255).byte().numpy().transpose(1, 2, 0)  # CHW → HWC for RGB
 
-    # --- RGB Histogram ---
-    img_tensor = transform(img)  # This is what's used for model input
-    img_np = img_tensor.mul(255).byte().numpy().transpose(1, 2, 0)  # CHW → HWC for RGB
+            # Safely split into RGB channels
+            r_vals = img_np[:, :, 0].flatten()
+            g_vals = img_np[:, :, 1].flatten()
+            b_vals = img_np[:, :, 2].flatten()
 
-    # Safely split into RGB channels
-    r_vals = img_np[:, :, 0].flatten()
-    g_vals = img_np[:, :, 1].flatten()
-    b_vals = img_np[:, :, 2].flatten()
+            fig1, ax1 = plt.subplots()
+            ax1.hist([r_vals, g_vals, b_vals], bins=256, color=['r', 'g', 'b'], label=['Red', 'Green', 'Blue'], alpha=0.6)
+            ax1.set_title("RGB Color Histogram")
+            ax1.set_xlabel("Pixel Intensity")
+            ax1.set_ylabel("Frequency")
+            ax1.legend()
 
-    fig1, ax1 = plt.subplots()
-    ax1.hist([r_vals, g_vals, b_vals], bins=256, color=['r', 'g', 'b'], label=['Red', 'Green', 'Blue'], alpha=0.6)
-    ax1.set_title("RGB Color Histogram")
-    ax1.set_xlabel("Pixel Intensity")
-    ax1.set_ylabel("Frequency")
-    ax1.legend()
+            hist_img_path = "rgb_histogram.png"
+            fig1.savefig(hist_img_path)
+            plt.close(fig1)  # Close to free memory
 
-    hist_img_path = "rgb_histogram.png"
-    fig1.savefig(hist_img_path)
-    plt.close(fig1)  # Close to free memory
+            pdf.image(hist_img_path, x=10, w=180)
+            pdf.ln(10)
 
-    pdf.image(hist_img_path, x=10, w=180)
-    pdf.ln(10)
+            # --- Boxplot ---
+            fig2, ax2 = plt.subplots()
+            ax2.boxplot([r_vals, g_vals, b_vals], labels=['Red', 'Green', 'Blue'])
+            ax2.set_title("Pixel Intensity Distribution")
+            ax2.set_ylabel("Intensity")
 
-    # --- Boxplot ---
-    fig2, ax2 = plt.subplots()
-    ax2.boxplot([r_vals, g_vals, b_vals], labels=['Red', 'Green', 'Blue'])
-    ax2.set_title("Pixel Intensity Distribution")
-    ax2.set_ylabel("Intensity")
+            boxplot_img_path = "boxplot_rgb.png"
+            fig2.savefig(boxplot_img_path)
+            plt.close(fig2)
 
-    boxplot_img_path = "boxplot_rgb.png"
-    fig2.savefig(boxplot_img_path)
-    plt.close(fig2)
+            pdf.image(boxplot_img_path, x=10, w=180)
+            pdf.ln(10)
 
-    pdf.image(boxplot_img_path, x=10, w=180)
-    pdf.ln(10)
+            # Save PDF to a buffer
+            pdf_output = pdf.output(dest='S').encode('latin1')
+            
+            # Provide download link for the PDF report
+            st.download_button("📄 Download PDF Report", data=pdf_output, file_name="analysis_report.pdf", key="pdf_report_download")
 
-    # Save PDF to a buffer
-    pdf_output = pdf.output(dest='S').encode('latin1')
-    
-    # Provide download link for the PDF report
-    st.download_button("📄 Download PDF Report", data=pdf_output, file_name="analysis_report.pdf", key="pdf_report_download")
+        # --- Feedback Section ---
+        st.markdown("### Was this prediction correct?")
 
-# --- Feedback Section ---
-st.markdown("### Was this prediction correct?")
+        # Use session state for feedback selection
+        if "feedback_option" not in st.session_state:
+            st.session_state.feedback_option = "Yes"
 
-# Use session state for feedback selection
-if "feedback_option" not in st.session_state:
-    st.session_state.feedback_option = "Yes"
+        st.radio("Select an option:", ["Yes", "No"], key="feedback_option")
 
-st.radio("Select an option:", ["Yes", "No"], key="feedback_option")
+        feedback_dir = "feedback_dir"
+        os.makedirs(feedback_dir, exist_ok=True)
 
-feedback_dir = "feedback_dir"
-os.makedirs(feedback_dir, exist_ok=True)
+        # If feedback is No, show correction dropdown and store it
+        if st.session_state.feedback_option == "No":
+            if "corrected_label" not in st.session_state:
+                st.session_state.corrected_label = "CLL"
+            st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"], key="corrected_label")
 
-# If feedback is No, show correction dropdown and store it
-if st.session_state.feedback_option == "No":
-    if "corrected_label" not in st.session_state:
-        st.session_state.corrected_label = "CLL"
-    st.selectbox("What should the correct class be?", ["CLL", "FL", "MCL"], key="corrected_label")
+        # Submit button with logic
+        if st.button("Submit Error Report"):
+            if st.session_state.feedback_option == "No" and "corrected_label" in st.session_state:
+                timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+                filename_base = f"{timestamp}_{predicted_label}_wrong-{st.session_state.corrected_label}"
 
-# Submit button with logic
-if st.button("Submit Error Report"):
-    if st.session_state.feedback_option == "No" and "corrected_label" in st.session_state:
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        filename_base = f"{timestamp}_{predicted_label}_wrong-{st.session_state.corrected_label}"
+                # Save image
+                img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
+                img.save(img_save_path)
 
-        # Save image
-        img_save_path = os.path.join(feedback_dir, filename_base + ".jpg")
-        img.save(img_save_path)
+                # Append to log
+                log_path = os.path.join(feedback_dir, "feedback_log.csv")
+                with open(log_path, "a") as f:
+                    f.write(f"{filename_base},{predicted_label},{st.session_state.corrected_label},{confidence:.4f}\n")
 
-        # Append to log
-        log_path = os.path.join(feedback_dir, "feedback_log.csv")
-        with open(log_path, "a") as f:
-            f.write(f"{filename_base},{predicted_label},{st.session_state.corrected_label},{confidence:.4f}\n")
-
-        st.success("✅ Thank you! Your feedback and image were saved.")
-    else:
-        st.warning("Please select 'No' and choose the correct class before submitting.")
-
+                st.success("✅ Thank you! Your feedback and image were saved.")
+            else:
+                st.warning("Please select 'No' and choose the correct class before submitting.")
 
 # --- HELP TAB ---
 with tab_help:
@@ -372,10 +354,10 @@ with tab_help:
     
     **Link to documentation**
      https://github.com/Jacinda-G/-lymphoid-malignancy-classification
-                
+                 
     **User Guide (click view raw to download)**
     https://github.com/Jacinda-G/-lymphoid-malignancy-classification/blob/main/Lymphoid%20Malignancy%20Product%20User%20Guide.docx
-                
+                 
     **Tabs**  
     - **Demo Mode**: A walkthrough of how the model was trained.  
     - **Interactive Mode**: Upload or link a tile, classify, analyze, and download reports.  
