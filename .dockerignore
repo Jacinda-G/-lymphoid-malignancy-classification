@@ -1,18 +1,41 @@
+# Python cache and build artifacts
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
 *.pyd
+
+# Logs and metadata
 *.log
 *.DS_Store
+
+# Virtual environments and editors
 .vscode/
 .venv/
 .env
 *.sqlite
+
+# Large model and data files
 *.pt
 *.pth
-test_assets/
-*.jpg
-*.png
 *.pdf
+*.jpg
+*.jpeg
+*.png
+
+# Test data and assets
+test_assets/
+tests/
 data/
 model_checkpoints/
+notebooks/
+*.ipynb_checkpoints
+
+# Compiled extensions or temp files
+build/
+dist/
+*.egg-info/
+
+# OS and system files
+Thumbs.db
+ehthumbs.db
+Icon?

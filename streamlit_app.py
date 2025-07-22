@@ -185,8 +185,6 @@ with tab_interactive:
             predicted_label = class_labels[predicted_class.item()]
             confidence = confidence.item()
 
-            st.success(f"🧠 **Prediction**: {predicted_label} ({confidence*100:.2f}% confidence)")
-
             # --- Grad-CAM ---
             target_layer = model.layer4[1].conv2
             gradcam = GradCAM(model, target_layer)
